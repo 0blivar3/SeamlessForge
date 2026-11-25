@@ -2,7 +2,6 @@
 import cv2
 import numpy as np
 
-
 def offset_blend(image: np.ndarray, blend_width: int | None = None, blur_sigma: float = 8.0) -> np.ndarray:
     if not isinstance(image, np.ndarray) or image.ndim not in (2, 3):
         raise ValueError("image must be a 2D or 3D numpy array")
@@ -13,7 +12,7 @@ def offset_blend(image: np.ndarray, blend_width: int | None = None, blur_sigma: 
         blend_width = max(1, min(h, w) // 8)
     blend_width = int(blend_width)
     if not 1 <= blend_width <= min(h, w) // 2:
-        raise ValueError("invalid blend_width")
+        raise ValueError("blend_width must be between 1 and half the shortest dimension")
     src = image.astype(np.float32)
     shifted = np.roll(src, (h // 2, w // 2), axis=(0, 1))
     out = shifted.copy()
@@ -37,7 +36,7 @@ def offset_blend(image: np.ndarray, blend_width: int | None = None, blur_sigma: 
         if out.ndim == 3:
             mask = mask[..., None]
         out = out * (1-mask) + blurred * mask
-    result = np.roll(out, (-h // 2, -w // 2), axis=(0, 1))
+    result = np.roll(out, (-(h // 2), -(w // 2)), axis=(0, 1))
     if np.issubdtype(image.dtype, np.integer):
         result = np.clip(np.rint(result), 0, np.iinfo(image.dtype).max)
     return result.astype(image.dtype)
