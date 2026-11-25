@@ -36,7 +36,10 @@ python main.py
 pytest -q
 ```
 
-## Windows executable
+## Windows installer
+Run the **Windows installer** workflow manually from GitHub Actions, or push a version tag such as `v0.1.0`. The workflow builds a PyInstaller application and packages it into an Inno Setup installer artifact.
+
+For a local portable build:
 ```powershell
 pyinstaller --noconfirm --windowed --name SeamlessForge --collect-all PySide6 --collect-all OpenGL main.py
 ```
@@ -48,4 +51,4 @@ pyinstaller --noconfirm --windowed --name SeamlessForge --collect-all PySide6 --
 - 3D preview requires a working OpenGL 3.3-capable graphics driver. The 3D viewport currently previews the texture on a sphere.
 
 ## Planned expansion
-The next development milestones are patch-based texture synthesis, editable blend parameters, presets, more material meshes (plane/cube), richer quality diagnostics, and a signed Windows installer.
+The next development milestones are patch-based texture synthesis, editable blend parameters, presets, more material meshes (plane/cube), richer quality diagnostics, and signed installer releases.
