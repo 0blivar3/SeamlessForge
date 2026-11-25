@@ -2,13 +2,15 @@
 from pathlib import Path
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
-    QLabel, QFileDialog, QComboBox, QSpinBox, QGroupBox, QGridLayout, QMessageBox, QStatusBar)
+    QLabel, QFileDialog, QComboBox, QSpinBox, QGroupBox, QGridLayout, QMessageBox, QStatusBar,
+    QDialog)
 from core.image_io import load_image, save_image
 from core.processor import process_image
 from core.quality import analyze_edges
 from core.batch import process_folder
 from core.history import ImageHistory
 from .preview import ImagePreview
+from .preview_3d import Texture3DPreview
 from .workers import FunctionWorker
 
 class MainWindow(QMainWindow):
@@ -18,6 +20,7 @@ class MainWindow(QMainWindow):
         self.resize(1360, 860)
         self.original=None; self.result=None; self.path=None
         self.pool=QThreadPool.globalInstance(); self.history=ImageHistory(); self._workers=set()
+        self.preview_dialog=None
         self.setAcceptDrops(True)
         self._build_ui()
         self.setStyleSheet("""
@@ -42,6 +45,7 @@ class MainWindow(QMainWindow):
         self.repeat=QSpinBox(); self.repeat.setRange(1,10); self.repeat.setValue(3); form.addWidget(self.repeat)
         self.process_btn=QPushButton("Process texture"); self.process_btn.clicked.connect(self.process); form.addWidget(self.process_btn)
         self.save_btn=QPushButton("Export result"); self.save_btn.clicked.connect(self.save_dialog); self.save_btn.setEnabled(False); form.addWidget(self.save_btn)
+        self.preview3d_btn=QPushButton("3D material preview"); self.preview3d_btn.clicked.connect(self.show_3d_preview); form.addWidget(self.preview3d_btn)
         side.addWidget(box)
         history=QGroupBox("History"); hbox=QHBoxLayout(history)
         self.undo_btn=QPushButton("Undo"); self.undo_btn.clicked.connect(self.undo); self.undo_btn.setEnabled(False)
@@ -110,6 +114,19 @@ class MainWindow(QMainWindow):
     def redo(self):
         image=self.history.redo()
         if image is not None: self.result=image; self._display_result()
+
+    def show_3d_preview(self):
+        image=self.result if self.result is not None else self.original
+        if image is None:
+            QMessageBox.information(self,"3D preview","Open a texture first."); return
+        self.preview_dialog=QDialog(self); self.preview_dialog.setWindowTitle("SeamlessForge · 3D Material Preview")
+        self.preview_dialog.resize(760,620)
+        layout=QVBoxLayout(self.preview_dialog)
+        try:
+            view=Texture3DPreview(self.preview_dialog); view.set_image(image); layout.addWidget(view)
+            self.preview_dialog.show()
+        except Exception as exc:
+            QMessageBox.warning(self,"3D preview unavailable",f"Could not initialize OpenGL preview:\n{exc}")
 
     def batch_dialog(self):
         source=QFileDialog.getExistingDirectory(self,"Select source folder")
