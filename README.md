@@ -2,14 +2,21 @@
 
 SeamlessForge is a desktop toolkit for preparing tileable textures, inspecting seams and previewing materials. It targets Python 3.12+ and uses PySide6, OpenCV, NumPy and Pillow.
 
-## Current features
-- **Seam repair:** Offset Blending with wrap-aware filtering and alpha-channel preservation.
-- **Additional tiling:** Mirror Tiling (creates a mirrored repeated image) and Poisson Blending.
-- **Diagnostics:** opposite-edge difference measurements and a seam score indicator.
-- **Preview:** 2D repeated texture preview and an interactive OpenGL sphere material preview.
-- **Workflow:** drag-and-drop loading, background processing, undo/redo history and folder batch processing.
-- **Formats:** PNG, JPEG, BMP, TIFF, TGA and WebP. Alpha is preserved where the selected format supports it.
-- **Automation:** pytest suite and GitHub Actions on Windows, macOS and Linux.
+## Features
+
+### Texture algorithms
+- **Offset Blending** — offsets the image and blends the central cross to move visible borders into the middle.
+- **Poisson Blending** — gradient-domain seam repair.
+- **Mirror Tiling** — creates a mirrored repeat for textures that tolerate reflection.
+- **Edge Feather** — wrap-aware soft blending around all four borders.
+- **FFT Seamless** — frequency-domain low-pass correction focused on border bands.
+- **Directional Match** — compensates broad horizontal and vertical color drift between opposite edges.
+
+### Workflow and preview
+- Interactive software-rendered 3D sphere preview. It does not require OpenGL or a specific graphics driver.
+- 2D repeated preview, edge diagnostics, drag-and-drop, undo/redo and folder batch processing.
+- PNG, JPEG, BMP, TIFF, TGA and WebP import/export.
+- Background image processing and GitHub Actions tests on Windows, macOS and Linux.
 
 ## Quick start
 
@@ -37,18 +44,10 @@ pytest -q
 ```
 
 ## Windows installer
-Run the **Windows installer** workflow manually from GitHub Actions, or push a version tag such as `v0.1.0`. The workflow builds a PyInstaller application and packages it into an Inno Setup installer artifact.
+Run the **Windows installer** workflow manually from GitHub Actions, or push a version tag such as `v0.1.0`.
 
-For a local portable build:
-```powershell
-pyinstaller --noconfirm --windowed --name SeamlessForge --collect-all PySide6 --collect-all OpenGL main.py
-```
-
-## Important notes
-- The seam score measures the color difference between opposite edge pixels. It is a useful diagnostic, not a mathematical guarantee of seamless repetition.
-- Mirror Tiling outputs a larger mirrored repeat; it does not preserve the original dimensions.
-- Poisson blending may change local color and contrast. Always inspect the result before exporting.
-- 3D preview requires a working OpenGL 3.3-capable graphics driver. The 3D viewport currently previews the texture on a sphere.
-
-## Planned expansion
-The next development milestones are patch-based texture synthesis, editable blend parameters, presets, more material meshes (plane/cube), richer quality diagnostics, and signed installer releases.
+## Notes
+- The seam score measures opposite-edge pixel differences; it is a diagnostic, not a mathematical guarantee.
+- Mirror Tiling creates a larger mirrored repeat.
+- FFT Seamless and Edge Feather soften border regions and can reduce detail; compare the output before exporting.
+- Poisson Blending may alter local color and contrast.

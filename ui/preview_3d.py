@@ -1,228 +1,124 @@
-"""Interactive OpenGL sphere material preview."""
-import ctypes
+"""Portable software-rendered 3D material preview (no OpenGL dependency)."""
+import math
 
+import cv2
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QMatrix4x4, QVector3D, QSurfaceFormat
-from PySide6.QtOpenGL import QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture
-from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from OpenGL.GL import (
-    glClearColor, glClear, glEnable, glViewport, glGenVertexArrays, glBindVertexArray,
-    glGenBuffers, glBindBuffer, glBufferData, glEnableVertexAttribArray, glVertexAttribPointer,
-    glDrawElements, glDeleteBuffers, glDeleteVertexArrays, glDepthFunc,
-    GL_DEPTH_TEST, GL_LEQUAL, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT,
-    GL_ARRAY_BUFFER, GL_ELEMENT_ARRAY_BUFFER, GL_STATIC_DRAW, GL_FLOAT,
-    GL_FALSE, GL_TRIANGLES, GL_UNSIGNED_INT,
-)
-
-VERTEX_SHADER = """#version 330 core
-layout(location=0) in vec3 position;
-layout(location=1) in vec2 texcoord;
-layout(location=2) in vec3 normal;
-uniform mat4 mvp;
-uniform mat4 model;
-out vec2 uv;
-out vec3 worldNormal;
-void main() {
-    uv = texcoord;
-    worldNormal = mat3(model) * normal;
-    gl_Position = mvp * vec4(position, 1.0);
-}
-"""
-
-FRAGMENT_SHADER = """#version 330 core
-in vec2 uv;
-in vec3 worldNormal;
-uniform sampler2D materialTexture;
-out vec4 fragColor;
-void main() {
-    vec3 n = normalize(worldNormal);
-    vec3 l = normalize(vec3(-0.4, 0.8, 0.7));
-    float d = max(dot(n, l), 0.0);
-    vec4 t = texture(materialTexture, uv);
-    fragColor = vec4(t.rgb * (0.28 + d * 0.72), t.a);
-}
-"""
+from PySide6.QtGui import QImage, QPainter, QPen
+from PySide6.QtWidgets import QWidget
 
 
-def _sphere(rows=32, columns=64):
-    vertices = []
-    indices = []
-    for y in range(rows + 1):
-        v = y / rows
-        phi = v * np.pi
-        for x in range(columns + 1):
-            u = x / columns
-            theta = u * 2 * np.pi
-            point = (
-                np.sin(phi) * np.cos(theta),
-                np.cos(phi),
-                np.sin(phi) * np.sin(theta),
-            )
-            vertices.extend((*point, u, v, *point))
-    for y in range(rows):
-        for x in range(columns):
-            a = y * (columns + 1) + x
-            b = a + columns + 1
-            indices.extend((a, b, a + 1, a + 1, b, b + 1))
-    return np.asarray(vertices, np.float32), np.asarray(indices, np.uint32)
+class Texture3DPreview(QWidget):
+    """Interactive textured sphere rendered on the CPU for driver-independent preview."""
 
-
-class Texture3DPreview(QOpenGLWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        fmt = QSurfaceFormat()
-        fmt.setRenderableType(QSurfaceFormat.OpenGL)
-        fmt.setVersion(3, 3)
-        fmt.setProfile(QSurfaceFormat.CoreProfile)
-        fmt.setDepthBufferSize(24)
-        self.setFormat(fmt)
-
-        self.setMinimumSize(0, 0)
-        self._vertices, self._indices = _sphere()
-        self._texture = None
+        self.setMinimumSize(240, 240)
+        self.setMouseTracking(True)
         self._image = None
-        self._vao = 0
-        self._vbo = 0
-        self._ebo = 0
-        self._program = None
+        self._frame = None
         self._last_pos = None
-        self.rotation_x = -15.0
+        self.rotation_x = -12.0
         self.rotation_y = 25.0
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
 
     def set_image(self, image):
-        self._image = np.array(image, copy=True)
-        if self.isValid():
-            self.makeCurrent()
-            try:
-                self._upload_texture()
-            finally:
-                self.doneCurrent()
+        arr = np.asarray(image)
+        if arr.ndim == 2:
+            arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
+        elif arr.shape[2] == 4:
+            rgb = arr[..., :3].astype(np.float32)
+            alpha = arr[..., 3:4].astype(np.float32) / 255.0
+            arr = np.clip(rgb * alpha + 24 * (1 - alpha), 0, 255).astype(np.uint8)
+        else:
+            arr = arr[..., :3]
+        self._image = np.ascontiguousarray(arr, dtype=np.uint8)
+        self._render()
         self.update()
 
-    def initializeGL(self):
-        # QOpenGLWidget owns the context; all PyOpenGL calls must happen while
-        # this widget's context is current. Normalize GL object names to Python
-        # ints because PyOpenGL can return NumPy scalar types on some platforms.
-        from OpenGL.GL import glGetString, GL_VERSION
-        context = self.context()
-        if context is None or not context.isValid():
-            raise RuntimeError("Qt did not create a valid OpenGL context.")
-        actual = context.format()
-        if (actual.majorVersion(), actual.minorVersion()) < (3, 3):
-            raise RuntimeError(
-                f"OpenGL 3.3 is required; received {actual.majorVersion()}.{actual.minorVersion()}."
-            )
-        version = glGetString(GL_VERSION)
-        if not version:
-            raise RuntimeError("OpenGL context is not current.")
-        glClearColor(0.055, 0.07, 0.095, 1.0)
-        glEnable(GL_DEPTH_TEST)
-        glDepthFunc(GL_LEQUAL)
-
-        self._program = QOpenGLShaderProgram(self)
-        if not self._program.addShaderFromSourceCode(QOpenGLShader.Vertex, VERTEX_SHADER):
-            raise RuntimeError(f"Vertex shader compilation failed: {self._program.log()}")
-        if not self._program.addShaderFromSourceCode(QOpenGLShader.Fragment, FRAGMENT_SHADER):
-            raise RuntimeError(f"Fragment shader compilation failed: {self._program.log()}")
-        if not self._program.link():
-            raise RuntimeError(f"Shader link failed: {self._program.log()}")
-
-        self._vao = int(glGenVertexArrays(1))
-        self._vbo = int(glGenBuffers(1))
-        self._ebo = int(glGenBuffers(1))
-        if not self._vao or not self._vbo or not self._ebo:
-            raise RuntimeError("OpenGL could not allocate the sphere mesh buffers.")
-
-        glBindVertexArray(self._vao)
-        glBindBuffer(GL_ARRAY_BUFFER, self._vbo)
-        glBufferData(GL_ARRAY_BUFFER, self._vertices.nbytes, self._vertices, GL_STATIC_DRAW)
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self._ebo)
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, self._indices.nbytes, self._indices, GL_STATIC_DRAW)
-        for location, size, offset in ((0, 3, 0), (1, 2, 12), (2, 3, 20)):
-            glEnableVertexAttribArray(location)
-            glVertexAttribPointer(
-                location, size, GL_FLOAT, GL_FALSE, 32, ctypes.c_void_p(offset)
-            )
-        glBindVertexArray(0)
-
-        if self._image is not None:
-            self._upload_texture()
-
-    def _upload_texture(self):
-        if self._texture is not None:
-            self._texture.destroy()
-            self._texture = None
+    def _render(self):
         if self._image is None:
+            self._frame = None
             return
-        from .preview import to_qimage
-        self._texture = QOpenGLTexture(to_qimage(self._image).mirrored())
-        self._texture.setWrapMode(QOpenGLTexture.DirectionS, QOpenGLTexture.Repeat)
-        self._texture.setWrapMode(QOpenGLTexture.DirectionT, QOpenGLTexture.Repeat)
-        self._texture.setMinificationFilter(QOpenGLTexture.LinearMipMapLinear)
-        self._texture.setMagnificationFilter(QOpenGLTexture.Linear)
-        self._texture.generateMipMaps()
+        side = max(180, min(720, min(self.width(), self.height())))
+        side = max(180, side - 24)
+        yy, xx = np.mgrid[-1:1:complex(side), -1:1:complex(side)]
+        radius2 = xx * xx + yy * yy
+        visible = radius2 <= 0.96
+        z = np.sqrt(np.maximum(0.0, 0.96 - radius2))
+        nx, ny, nz = xx.copy(), -yy.copy(), z
 
-    def paintGL(self):
-        glViewport(0, 0, self.width(), self.height())
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        if self._program is None or self._texture is None:
-            return
-        projection = QMatrix4x4()
-        projection.perspective(
-            42, max(1, self.width()) / max(1, self.height()), 0.1, 100
-        )
-        view = QMatrix4x4()
-        view.lookAt(QVector3D(0, 0, 3.2), QVector3D(0, 0, 0), QVector3D(0, 1, 0))
-        model = QMatrix4x4()
-        model.rotate(self.rotation_x, 1, 0, 0)
-        model.rotate(self.rotation_y, 0, 1, 0)
+        rx, ry = math.radians(self.rotation_x), math.radians(self.rotation_y)
+        # Rotate the sphere coordinates to simulate orbiting the material.
+        x1 = nx * math.cos(ry) + nz * math.sin(ry)
+        z1 = -nx * math.sin(ry) + nz * math.cos(ry)
+        y2 = ny * math.cos(rx) - z1 * math.sin(rx)
+        z2 = ny * math.sin(rx) + z1 * math.cos(rx)
+        x2 = x1
 
-        self._program.bind()
-        self._program.setUniformValue("mvp", projection * view * model)
-        self._program.setUniformValue("model", model)
-        self._program.setUniformValue("materialTexture", 0)
-        self._texture.bind(0)
-        glBindVertexArray(int(self._vao))
-        glDrawElements(GL_TRIANGLES, int(self._indices.size), GL_UNSIGNED_INT, None)
-        glBindVertexArray(0)
-        self._texture.release()
-        self._program.release()
+        u = (np.arctan2(z2, x2) / (2 * np.pi) + 0.5) % 1.0
+        v = np.arccos(np.clip(y2, -1, 1)) / np.pi
+        h, w = self._image.shape[:2]
+        map_x = (u * (w - 1)).astype(np.float32)
+        map_y = (v * (h - 1)).astype(np.float32)
+        sampled = cv2.remap(
+            self._image, map_x, map_y, cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_WRAP,
+        ).astype(np.float32)
 
-    def resizeGL(self, width, height):
-        glViewport(0, 0, width, max(1, height))
+        # Soft studio lighting and a subtle rim highlight.
+        length = np.sqrt(x2*x2 + y2*y2 + z2*z2) + 1e-6
+        nx2, ny2, nz2 = x2/length, y2/length, z2/length
+        light = np.array([-0.45, 0.62, 0.78], dtype=np.float32)
+        diffuse = np.maximum(0, nx2*light[0] + ny2*light[1] + nz2*light[2])
+        rim = np.power(np.maximum(0, 1 - nz2), 2) * 0.10
+        shade = 0.24 + 0.76 * diffuse + rim
+        rendered = np.clip(sampled * shade[..., None], 0, 255).astype(np.uint8)
+        canvas = np.full((side, side, 3), (20, 25, 34), dtype=np.uint8)
+        canvas[visible] = rendered[visible]
+        self._frame = QImage(
+            np.ascontiguousarray(canvas).data, side, side, side * 3,
+            QImage.Format_RGB888,
+        ).copy()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.black)
+        if self._frame is None:
+            painter.setPen(QPen(Qt.lightGray))
+            painter.drawText(self.rect(), Qt.AlignCenter, "Load a texture to preview")
+        else:
+            side = min(self.width(), self.height(), self._frame.width())
+            target = self.rect().adjusted(
+                (self.width()-side)//2, (self.height()-side)//2,
+                -(self.width()-side)//2, -(self.height()-side)//2,
+            )
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
+            painter.drawImage(target, self._frame)
+        painter.end()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._render()
 
     def mousePressEvent(self, event):
-        self._last_pos = event.position().toPoint()
+        if event.button() == Qt.LeftButton:
+            self._last_pos = event.position().toPoint()
 
     def mouseMoveEvent(self, event):
         if self._last_pos is not None and event.buttons() & Qt.LeftButton:
             pos = event.position().toPoint()
             delta = pos - self._last_pos
-            self.rotation_x = max(-89, min(89, self.rotation_x + delta.y() * 0.6))
-            self.rotation_y += delta.x() * 0.6
+            self.rotation_x = max(-85, min(85, self.rotation_x + delta.y() * 0.7))
+            self.rotation_y += delta.x() * 0.7
             self._last_pos = pos
+            self._render()
             self.update()
 
     def mouseReleaseEvent(self, event):
         self._last_pos = None
 
     def wheelEvent(self, event):
-        self.rotation_y += event.angleDelta().y() / 24
+        self.rotation_y += event.angleDelta().y() / 18
+        self._render()
         self.update()
-
-    def closeEvent(self, event):
-        if self.isValid():
-            self.makeCurrent()
-            try:
-                if self._texture is not None:
-                    self._texture.destroy()
-                if self._vbo:
-                    glDeleteBuffers(1, [int(self._vbo)])
-                if self._ebo:
-                    glDeleteBuffers(1, [int(self._ebo)])
-                if self._vao:
-                    glDeleteVertexArrays(1, [int(self._vao)])
-            finally:
-                self.doneCurrent()
-        super().closeEvent(event)

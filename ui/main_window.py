@@ -73,7 +73,7 @@ class MainWindow(QMainWindow):
         box = QGroupBox("Processing")
         form = QVBoxLayout(box)
         self.algorithm = QComboBox()
-        self.algorithm.addItems(["Offset Blending", "Poisson Blending", "Mirror Tiling"])
+        self.algorithm.addItems(["Offset Blending", "Poisson Blending", "Mirror Tiling", "Edge Feather", "FFT Seamless", "Directional Match"])
         form.addWidget(QLabel("Algorithm"))
         form.addWidget(self.algorithm)
         form.addWidget(QLabel("Preview repetitions"))
