@@ -1,0 +1,104 @@
+"""Main SeamlessForge desktop interface."""
+from pathlib import Path
+import numpy as np
+from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
+    QLabel, QFileDialog, QComboBox, QSpinBox, QGroupBox, QGridLayout, QMessageBox, QStatusBar)
+from core.image_io import load_image, save_image
+from core.processor import process_image
+from core.quality import analyze_edges
+from .preview import ImagePreview
+from .workers import FunctionWorker
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("SeamlessForge")
+        self.resize(1280, 820)
+        self.original=None; self.result=None; self.path=None
+        self.pool=QThreadPool.globalInstance()
+        self.setAcceptDrops(True)
+        self._build_ui()
+        self.setStyleSheet("""
+            QMainWindow,QWidget { background:#10141c;color:#e7edf7;font-family:'Segoe UI';font-size:10pt; }
+            QPushButton { background:#273449;border:1px solid #3a4a62;border-radius:6px;padding:9px 14px; }
+            QPushButton:hover { background:#344762; } QPushButton:disabled { color:#687386;background:#1a202b; }
+            QComboBox,QSpinBox { background:#1b2330;border:1px solid #39465a;border-radius:5px;padding:6px; }
+            QGroupBox { border:1px solid #303b4d;border-radius:8px;margin-top:12px;padding:12px;font-weight:600; }
+            QGroupBox::title { subcontrol-origin:margin;left:10px;padding:0 5px; }
+        """)
+
+    def _build_ui(self):
+        root=QWidget(); self.setCentralWidget(root); outer=QHBoxLayout(root)
+        side=QVBoxLayout(); side.setSpacing(12)
+        brand=QLabel("SEAMLESSFORGE"); brand.setStyleSheet("font-size:20px;font-weight:800;color:#8ab4ff;padding:8px;")
+        side.addWidget(brand)
+        self.open_btn=QPushButton("Open texture"); self.open_btn.clicked.connect(self.open_dialog); side.addWidget(self.open_btn)
+        box=QGroupBox("Processing"); form=QVBoxLayout(box)
+        self.algorithm=QComboBox(); self.algorithm.addItems(["Offset Blending","Poisson Blending","Mirror Tiling"])
+        form.addWidget(QLabel("Algorithm")); form.addWidget(self.algorithm)
+        form.addWidget(QLabel("Preview repetitions"))
+        self.repeat=QSpinBox(); self.repeat.setRange(1,10); self.repeat.setValue(3); form.addWidget(self.repeat)
+        self.process_btn=QPushButton("Process texture"); self.process_btn.clicked.connect(self.process); form.addWidget(self.process_btn)
+        self.save_btn=QPushButton("Export result"); self.save_btn.clicked.connect(self.save_dialog); self.save_btn.setEnabled(False); form.addWidget(self.save_btn)
+        side.addWidget(box)
+        metrics=QGroupBox("Seam analysis"); grid=QGridLayout(metrics)
+        self.score=QLabel("—"); self.horizontal=QLabel("—"); self.vertical=QLabel("—"); self.rating=QLabel("Load a texture")
+        for row,(name,widget) in enumerate([("Seam score",self.score),("Left / right",self.horizontal),("Top / bottom",self.vertical),("Assessment",self.rating)]):
+            grid.addWidget(QLabel(name),row,0); grid.addWidget(widget,row,1)
+        side.addWidget(metrics); side.addStretch()
+        hint=QLabel("Drag & drop an image here\nPNG · JPG · TIFF · TGA · WEBP"); hint.setStyleSheet("color:#8491a5;padding:8px;")
+        side.addWidget(hint)
+        outer.addLayout(side,0)
+        previews=QHBoxLayout(); self.source_preview=ImagePreview("SOURCE"); self.result_preview=ImagePreview("PROCESSED RESULT")
+        previews.addWidget(self.source_preview); previews.addWidget(self.result_preview)
+        outer.addLayout(previews,1)
+        self.setStatusBar(QStatusBar()); self.statusBar().showMessage("Ready")
+
+    def open_dialog(self):
+        path,_=QFileDialog.getOpenFileName(self,"Open texture","","Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.tga *.webp)")
+        if path: self.load_path(path)
+
+    def load_path(self,path):
+        try:
+            self.original=load_image(path); self.path=Path(path); self.result=None
+            self.source_preview.set_image(self.original,self.repeat.value())
+            self.result_preview.label.setText("Process the source texture")
+            self.save_btn.setEnabled(False)
+            m=analyze_edges(self.original); self._show_metrics(m)
+            self.statusBar().showMessage(f"Loaded {self.path.name} · {self.original.shape[1]}×{self.original.shape[0]}")
+        except Exception as exc: QMessageBox.critical(self,"Could not open image",str(exc))
+
+    def process(self):
+        if self.original is None: return
+        self.process_btn.setEnabled(False); self.statusBar().showMessage("Processing…")
+        worker=FunctionWorker(process_image,self.original.copy(),self.algorithm.currentText())
+        worker.signals.finished.connect(self._processed); self.pool.start(worker)
+
+    def _processed(self,payload,error):
+        self.process_btn.setEnabled(True)
+        if error: QMessageBox.critical(self,"Processing failed",str(error)); self.statusBar().showMessage("Processing failed"); return
+        self.result,metrics=payload
+        self.result_preview.set_image(self.result,self.repeat.value())
+        self._show_metrics(metrics); self.save_btn.setEnabled(True)
+        self.statusBar().showMessage(f"Done · {self.result.shape[1]}×{self.result.shape[0]}")
+
+    def _show_metrics(self,m):
+        self.score.setText(f"{m['seam_score']:.1f}/100")
+        self.horizontal.setText(f"{m['horizontal_edge_difference']:.2f}")
+        self.vertical.setText(f"{m['vertical_edge_difference']:.2f}")
+        self.rating.setText(m["rating"])
+
+    def save_dialog(self):
+        if self.result is None: return
+        default=(self.path.stem if self.path else "texture")+"_seamless.png"
+        path,_=QFileDialog.getSaveFileName(self,"Export texture",default,"PNG (*.png);;JPEG (*.jpg *.jpeg);;TIFF (*.tiff);;TGA (*.tga);;WebP (*.webp)")
+        if path:
+            try: save_image(path,self.result); self.statusBar().showMessage(f"Saved: {path}")
+            except Exception as exc: QMessageBox.critical(self,"Export failed",str(exc))
+
+    def dragEnterEvent(self,event):
+        if event.mimeData().hasUrls(): event.acceptProposedAction()
+    def dropEvent(self,event):
+        urls=event.mimeData().urls()
+        if urls: self.load_path(urls[0].toLocalFile())

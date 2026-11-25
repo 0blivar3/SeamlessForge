@@ -1,0 +1,13 @@
+[project]
+name = "seamlessforge"
+version = "0.1.0"
+description = "Desktop toolkit for creating and analyzing seamless textures"
+requires-python = ">=3.12"
+dependencies = ["PySide6>=6.7", "opencv-python>=4.9", "numpy>=1.26", "Pillow>=10.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pyinstaller>=6.8"]
+preview3d = ["PyOpenGL>=3.1", "trimesh>=4.4"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
