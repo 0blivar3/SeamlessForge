@@ -12,8 +12,11 @@ def offset_blend(image: np.ndarray, blend_width: int | None = None, blur_sigma: 
         blend_width = max(1, min(h, w) // 8)
     blend_width = int(blend_width)
     if not 1 <= blend_width <= min(h, w) // 2:
-        raise ValueError("blend_width must be between 1 and half the shortest dimension")
-    src = image.astype(np.float32)
+        raise ValueError("blend_width must be between 1 and half the shortest image dimension")
+    has_alpha = image.ndim == 3 and image.shape[2] == 4
+    alpha = image[..., 3].copy() if has_alpha else None
+    work = image[..., :3] if has_alpha else image
+    src = work.astype(np.float32)
     shifted = np.roll(src, (h // 2, w // 2), axis=(0, 1))
     out = shifted.copy()
     cx, cy = w // 2, h // 2
@@ -29,14 +32,19 @@ def offset_blend(image: np.ndarray, blend_width: int | None = None, blur_sigma: 
         out[cy+i, :] = b * (1-.5*(1-t)) + mixed * (.5*(1-t))
     if blur_sigma > 0:
         k = max(3, int(blur_sigma * 2) | 1)
-        blurred = cv2.GaussianBlur(out, (k, k), blur_sigma, borderType=cv2.BORDER_WRAP)
+        pad = k // 2
+        padded = cv2.copyMakeBorder(out, pad, pad, pad, pad, cv2.BORDER_WRAP)
+        blurred = cv2.GaussianBlur(padded, (k, k), blur_sigma)[pad:-pad, pad:-pad]
         mask = np.zeros((h, w), np.float32)
-        mask[:, cx-blend_width:cx+blend_width] = .25
-        mask[cy-blend_width:cy+blend_width, :] = .25
+        mask[:, max(0,cx-blend_width):min(w,cx+blend_width)] = .25
+        mask[max(0,cy-blend_width):min(h,cy+blend_width), :] = .25
         if out.ndim == 3:
             mask = mask[..., None]
         out = out * (1-mask) + blurred * mask
     result = np.roll(out, (-(h // 2), -(w // 2)), axis=(0, 1))
     if np.issubdtype(image.dtype, np.integer):
         result = np.clip(np.rint(result), 0, np.iinfo(image.dtype).max)
-    return result.astype(image.dtype)
+    result = result.astype(work.dtype)
+    if has_alpha:
+        result = np.dstack((result, alpha))
+    return result

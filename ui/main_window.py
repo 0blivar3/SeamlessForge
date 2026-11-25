@@ -17,7 +17,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SeamlessForge")
         self.resize(1360, 860)
         self.original=None; self.result=None; self.path=None
-        self.pool=QThreadPool.globalInstance(); self.history=ImageHistory()
+        self.pool=QThreadPool.globalInstance(); self.history=ImageHistory(); self._workers=set()
         self.setAcceptDrops(True)
         self._build_ui()
         self.setStyleSheet("""
@@ -80,7 +80,9 @@ class MainWindow(QMainWindow):
         if self.original is None: return
         self.process_btn.setEnabled(False); self.statusBar().showMessage("Processing…")
         worker=FunctionWorker(process_image,self.original.copy(),self.algorithm.currentText())
-        worker.signals.finished.connect(self._processed); self.pool.start(worker)
+        self._workers.add(worker)
+        worker.signals.finished.connect(lambda payload,error,w=worker: (self._workers.discard(w),self._processed(payload,error)))
+        self.pool.start(worker)
 
     def _processed(self,payload,error):
         self.process_btn.setEnabled(True)
@@ -116,7 +118,9 @@ class MainWindow(QMainWindow):
         if not output: return
         self.batch_btn.setEnabled(False); self.statusBar().showMessage("Batch processing…")
         worker=FunctionWorker(process_folder,source,output,self.algorithm.currentText(),True)
-        worker.signals.finished.connect(self._batch_finished); self.pool.start(worker)
+        self._workers.add(worker)
+        worker.signals.finished.connect(lambda result,error,w=worker: (self._workers.discard(w),self._batch_finished(result,error)))
+        self.pool.start(worker)
 
     def _batch_finished(self,result,error):
         self.batch_btn.setEnabled(True)
