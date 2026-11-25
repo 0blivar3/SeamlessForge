@@ -11,3 +11,4 @@ preview3d = ["PyOpenGL>=3.1", "trimesh>=4.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
